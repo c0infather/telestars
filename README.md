@@ -19,8 +19,16 @@ cp .env.example .env
 4. Получите токен бота у [@BotFather](https://t.me/BotFather) в Telegram и добавьте его в `.env`:
 ```
 BOT_TOKEN=your_actual_bot_token_here
-DATABASE_URL=your_database_connection_string
+DATABASE_URL=postgresql://user:password@host:port/database
 ```
+
+5. Создайте таблицы в базе данных:
+```bash
+# Подключитесь к PostgreSQL и выполните
+psql -d your_database -f create_tables.sql
+```
+
+Или запустите бота - таблицы создадутся автоматически при первом запуске.
 
 ## Запуск
 
@@ -39,13 +47,32 @@ python telestars_bot.py
 
 - `telestars_bot.py` - основной файл с логикой бота
 - `config.py` - файл для загрузки креденшналов из .env
+- `database.py` - модуль для работы с базой данных
+- `create_tables.sql` - SQL скрипт для создания таблиц
 - `requirements.txt` - зависимости Python
 - `.env` - конфигурация (токен бота и строка подключения к БД)
 - `.env.example` - пример конфигурации
 
+## База данных
+
+Бот автоматически сохраняет всех новых пользователей в таблицу `users`. При каждом запуске команды `/start` данные пользователя обновляются в базе данных.
+
+Таблица `users` содержит следующие поля:
+- `id` (BIGINT) - Telegram user ID (Primary Key)
+- `username` (VARCHAR) - Telegram username
+- `first_name` (VARCHAR) - Имя пользователя
+- `last_name` (VARCHAR) - Фамилия
+- `language_code` (VARCHAR) - Код языка
+- `is_premium` (BOOLEAN) - Наличие Telegram Premium
+- `stars_balance` (INTEGER) - Баланс звезд (для будущего функционала)
+- `total_spent` (INTEGER) - Всего потрачено (для будущего функционала)
+- `created_at` (TIMESTAMP) - Дата регистрации
+- `updated_at` (TIMESTAMP) - Дата последнего обновления
+
 ## Технологии
 
-- Python 3.8+
-- python-telegram-bot 20.7
+- Python 3.6+
+- python-telegram-bot 12.8
 - python-dotenv
+- psycopg2-binary (PostgreSQL)
 
