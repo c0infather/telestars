@@ -1,4 +1,5 @@
 import logging
+import math
 from telegram import ReplyKeyboardMarkup, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 from config import BOT_TOKEN
@@ -47,17 +48,62 @@ def get_stars_selection_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_purchase_keyboard():
-    """Создает reply keyboard после выбора количества звезд"""
-    keyboard = [
-        ['🎁 В подарок'],
-        ['🔙 Назад']
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=False
+def show_order_message(update: Update, context: CallbackContext, amount: int, is_gift: bool = False, chat_id: int = None) -> None:
+    """Показывает сообщение с информацией о заказе"""
+    # Получаем chat_id из обновления или переданного параметра
+    if chat_id is None:
+        if update.callback_query:
+            chat_id = update.callback_query.message.chat_id
+            user = update.callback_query.from_user
+        else:
+            chat_id = update.message.chat_id
+            user = update.effective_user
+    else:
+        user = update.effective_user if not update.callback_query else update.callback_query.from_user
+    
+    username = user.username if user.username else "username"
+    
+    # Цена за одну звезду
+    price_per_star = 1.47
+    
+    # Рассчитываем стоимость
+    total_cost = amount * price_per_star
+    # Округляем в большую сторону
+    final_cost = math.ceil(total_cost)
+    
+    # Определяем получателя
+    if is_gift:
+        recipient_text = f"⭐ Звёзды для аккаунта @{username} (в подарок)"
+    else:
+        recipient_text = f"⭐ Звёзды для аккаунта @{username}"
+    
+    message = (
+        "⏳ Счёт активен 30 минут\n\n"
+        "🧾 Ваш заказ:\n"
+        f"{recipient_text}\n\n"
+        "💰 Стоимость:\n"
+        f" ⭐ Количество звезд = {final_cost} ₽ (исходя из цены {price_per_star} за звезду)\n"
+        "Итоговая сумма округлена в большую сторону\n\n"
+        "👇 Ссылка на оплату ниже"
     )
+    
+    # Сохраняем информацию о заказе
+    context.user_data['current_order'] = {
+        'amount': amount,
+        'cost': final_cost,
+        'is_gift': is_gift
+    }
+    
+    # Отправляем сообщение
+    context.bot.send_message(
+        chat_id=chat_id,
+        text=message,
+        reply_markup=get_reply_keyboard()
+    )
+    
+    # Сбрасываем состояние покупки
+    context.user_data.pop('buying_stars', None)
+    context.user_data.pop('stars_amount', None)
 
 
 def start(update: Update, context: CallbackContext) -> None:
@@ -87,8 +133,8 @@ def start(update: Update, context: CallbackContext) -> None:
 
 def handle_buy_stars(update: Update, context: CallbackContext) -> None:
     """Обработчик кнопки '⭐ Купить звезды'"""
-    # Сбрасываем состояние покупки
-    context.user_data.pop('buying_stars', None)
+    # Устанавливаем состояние выбора количества звезд
+    context.user_data['buying_stars'] = True
     context.user_data.pop('stars_amount', None)
     
     message = (
@@ -147,90 +193,80 @@ def handle_callback_query(update: Update, context: CallbackContext) -> None:
     
     if callback_data.startswith("stars_"):
         if callback_data == "stars_gift":
-            # Логика подарка (будет реализована позже)
+            # Устанавливаем флаг подарка и возвращаем к выбору количества
+            context.user_data['buying_stars'] = True
+            context.user_data['is_gift'] = True
             query.edit_message_text(
                 "🎁 Отправка звёзд в подарок\n\n"
-                "Функция в разработке..."
-            )
-            # Устанавливаем состояние для подарка
-            context.user_data['buying_stars'] = True
-            context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="Выберите действие:",
-                reply_markup=get_purchase_keyboard()
+                "Выберите количество звёзд ниже\n"
+                "или введите число от 50 до 10 000",
+                reply_markup=get_stars_selection_keyboard()
             )
         else:
             # Извлекаем количество звезд из callback_data
             amount = int(callback_data.split("_")[1])
-            context.user_data['buying_stars'] = True
-            context.user_data['stars_amount'] = amount
             
-            # Обновляем сообщение и показываем новое меню
-            query.edit_message_text(
-                f"✅ Выбрано: {amount} звёзд"
-            )
-            context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="Выберите действие:",
-                reply_markup=get_purchase_keyboard()
-            )
+            # Проверяем валидность количества
+            if amount < 50:
+                query.answer("❌ Минимум — 50 звёзд", show_alert=True)
+                return
+            elif amount > 10000:
+                query.answer("❌ Максимум — 10 000 звёзд", show_alert=True)
+                return
+            
+            # Проверяем, является ли это подарком
+            is_gift = context.user_data.get('is_gift', False)
+            
+            # Закрываем inline сообщение и показываем заказ
+            query.edit_message_text("✅ Обработка заказа...")
+            show_order_message(update, context, amount, is_gift, chat_id=query.message.chat_id)
+            
+            # Сбрасываем флаг подарка
+            context.user_data.pop('is_gift', None)
 
 
 def handle_message(update: Update, context: CallbackContext) -> None:
     """Обработчик текстовых сообщений"""
     text = update.message.text
     
-    # Проверяем, находится ли пользователь в процессе покупки звезд
+    # Проверяем, находится ли пользователь в процессе покупки звезд (выбор количества)
     if context.user_data.get('buying_stars'):
-        # Пользователь вводит количество звезд или использует меню
-        if text == "🎁 В подарок":
-            # Логика подарка (будет реализована позже)
-            update.message.reply_text(
-                "🎁 Отправка звёзд в подарок\n\n"
-                "Функция в разработке...",
-                reply_markup=get_purchase_keyboard()
-            )
-            return
-        elif text == "🔙 Назад":
-            # Возвращаемся к выбору количества
-            context.user_data.pop('buying_stars', None)
-            context.user_data.pop('stars_amount', None)
-            handle_buy_stars(update, context)
-            return
-        else:
-            # Проверяем, является ли введенный текст числом
-            try:
-                amount = int(text)
-                
-                if amount < 50:
-                    update.message.reply_text(
-                        "❌ Минимум — 50 звёзд",
-                        reply_markup=get_purchase_keyboard()
-                    )
-                    return
-                elif amount > 10000:
-                    update.message.reply_text(
-                        "❌ Максимум — 10 000 звёзд",
-                        reply_markup=get_purchase_keyboard()
-                    )
-                    return
-                else:
-                    # Корректное число
-                    context.user_data['stars_amount'] = amount
-                    update.message.reply_text(
-                        f"✅ Выбрано: {amount} звёзд\n\n"
-                        "Выберите действие:",
-                        reply_markup=get_purchase_keyboard()
-                    )
-                    return
-                    
-            except ValueError:
-                # Не число
+        # Проверяем, является ли введенный текст числом
+        try:
+            amount = int(text)
+            
+            # Проверка валидности количества
+            if amount < 50:
                 update.message.reply_text(
-                    "❌ Введите число от 50 до 10 000",
-                    reply_markup=get_purchase_keyboard()
+                    "❌ Минимум — 50 звёзд\n\n"
+                    "Попробуйте еще раз или выберите из предложенных вариантов:",
+                    reply_markup=get_stars_selection_keyboard()
                 )
                 return
+            elif amount > 10000:
+                update.message.reply_text(
+                    "❌ Максимум — 10 000 звёзд\n\n"
+                    "Попробуйте еще раз или выберите из предложенных вариантов:",
+                    reply_markup=get_stars_selection_keyboard()
+                )
+                return
+            else:
+                # Корректное число - показываем заказ
+                is_gift = context.user_data.get('is_gift', False)
+                show_order_message(update, context, amount, is_gift)
+                
+                # Сбрасываем флаг подарка
+                context.user_data.pop('is_gift', None)
+                return
+                
+        except ValueError:
+            # Не число - показываем ошибку и возвращаем к выбору
+            update.message.reply_text(
+                "❌ Введите число от 50 до 10 000\n\n"
+                "Или выберите из предложенных вариантов:",
+                reply_markup=get_stars_selection_keyboard()
+            )
+            return
     
     # Обработка основных команд меню
     if text == "⭐ Купить звезды":
