@@ -1,6 +1,6 @@
 import logging
-from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import ReplyKeyboardMarkup, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 from config import BOT_TOKEN
 from database import init_db, add_user
 
@@ -17,6 +17,41 @@ def get_reply_keyboard():
     keyboard = [
         ['⭐ Купить звезды', '💎 Купить Premium'],
         ['👤 Профиль', '🆘 Поддержка']
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+
+def get_stars_selection_keyboard():
+    """Создает inline keyboard для выбора количества звезд"""
+    keyboard = [
+        [
+            InlineKeyboardButton("⭐ 50", callback_data="stars_50"),
+            InlineKeyboardButton("⭐ 100", callback_data="stars_100")
+        ],
+        [
+            InlineKeyboardButton("⭐ 200", callback_data="stars_200"),
+            InlineKeyboardButton("⭐ 500", callback_data="stars_500")
+        ],
+        [
+            InlineKeyboardButton("⭐ 1000", callback_data="stars_1000"),
+            InlineKeyboardButton("⭐ 5000", callback_data="stars_5000")
+        ],
+        [
+            InlineKeyboardButton("🎁 В подарок", callback_data="stars_gift")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_purchase_keyboard():
+    """Создает reply keyboard после выбора количества звезд"""
+    keyboard = [
+        ['🎁 В подарок'],
+        ['🔙 Назад']
     ]
     return ReplyKeyboardMarkup(
         keyboard,
@@ -52,12 +87,21 @@ def start(update: Update, context: CallbackContext) -> None:
 
 def handle_buy_stars(update: Update, context: CallbackContext) -> None:
     """Обработчик кнопки '⭐ Купить звезды'"""
+    # Сбрасываем состояние покупки
+    context.user_data.pop('buying_stars', None)
+    context.user_data.pop('stars_amount', None)
+    
     message = (
-        "⭐ Купить звезды\n\n"
-        "Здесь будет функционал для покупки звезд Telegram.\n"
-        "Функция в разработке..."
+        "⭐ Покупка звёзд\n\n"
+        "Выберите количество звёзд ниже\n"
+        "или введите число от 50 до 10 000\n\n"
+        "Хотите отправить звёзды другу?\n"
+        "Нажмите «🎁 В подарок»"
     )
-    update.message.reply_text(message)
+    update.message.reply_text(
+        message,
+        reply_markup=get_stars_selection_keyboard()
+    )
 
 
 def handle_buy_premium(update: Update, context: CallbackContext) -> None:
@@ -94,10 +138,101 @@ def handle_support(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(message)
 
 
+def handle_callback_query(update: Update, context: CallbackContext) -> None:
+    """Обработчик inline кнопок"""
+    query = update.callback_query
+    query.answer()
+    
+    callback_data = query.data
+    
+    if callback_data.startswith("stars_"):
+        if callback_data == "stars_gift":
+            # Логика подарка (будет реализована позже)
+            query.edit_message_text(
+                "🎁 Отправка звёзд в подарок\n\n"
+                "Функция в разработке..."
+            )
+            # Устанавливаем состояние для подарка
+            context.user_data['buying_stars'] = True
+            context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="Выберите действие:",
+                reply_markup=get_purchase_keyboard()
+            )
+        else:
+            # Извлекаем количество звезд из callback_data
+            amount = int(callback_data.split("_")[1])
+            context.user_data['buying_stars'] = True
+            context.user_data['stars_amount'] = amount
+            
+            # Обновляем сообщение и показываем новое меню
+            query.edit_message_text(
+                f"✅ Выбрано: {amount} звёзд"
+            )
+            context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="Выберите действие:",
+                reply_markup=get_purchase_keyboard()
+            )
+
+
 def handle_message(update: Update, context: CallbackContext) -> None:
     """Обработчик текстовых сообщений"""
     text = update.message.text
     
+    # Проверяем, находится ли пользователь в процессе покупки звезд
+    if context.user_data.get('buying_stars'):
+        # Пользователь вводит количество звезд или использует меню
+        if text == "🎁 В подарок":
+            # Логика подарка (будет реализована позже)
+            update.message.reply_text(
+                "🎁 Отправка звёзд в подарок\n\n"
+                "Функция в разработке...",
+                reply_markup=get_purchase_keyboard()
+            )
+            return
+        elif text == "🔙 Назад":
+            # Возвращаемся к выбору количества
+            context.user_data.pop('buying_stars', None)
+            context.user_data.pop('stars_amount', None)
+            handle_buy_stars(update, context)
+            return
+        else:
+            # Проверяем, является ли введенный текст числом
+            try:
+                amount = int(text)
+                
+                if amount < 50:
+                    update.message.reply_text(
+                        "❌ Минимум — 50 звёзд",
+                        reply_markup=get_purchase_keyboard()
+                    )
+                    return
+                elif amount > 10000:
+                    update.message.reply_text(
+                        "❌ Максимум — 10 000 звёзд",
+                        reply_markup=get_purchase_keyboard()
+                    )
+                    return
+                else:
+                    # Корректное число
+                    context.user_data['stars_amount'] = amount
+                    update.message.reply_text(
+                        f"✅ Выбрано: {amount} звёзд\n\n"
+                        "Выберите действие:",
+                        reply_markup=get_purchase_keyboard()
+                    )
+                    return
+                    
+            except ValueError:
+                # Не число
+                update.message.reply_text(
+                    "❌ Введите число от 50 до 10 000",
+                    reply_markup=get_purchase_keyboard()
+                )
+                return
+    
+    # Обработка основных команд меню
     if text == "⭐ Купить звезды":
         handle_buy_stars(update, context)
     elif text == "💎 Купить Premium":
@@ -133,6 +268,7 @@ def main() -> None:
     
     # Регистрируем обработчики
     dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CallbackQueryHandler(handle_callback_query))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
     
     # Запускаем бота
