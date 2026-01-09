@@ -2,6 +2,7 @@ import logging
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from config import BOT_TOKEN
+from database import init_db, add_user
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,6 +28,17 @@ def get_reply_keyboard():
 def start(update: Update, context: CallbackContext) -> None:
     """Обработчик команды /start"""
     user = update.effective_user
+    
+    # Добавляем пользователя в базу данных
+    try:
+        is_new_user = add_user(user)
+        if is_new_user:
+            logger.info(f"Новый пользователь зарегистрирован: {user.id} (@{user.username or 'без username'})")
+        else:
+            logger.info(f"Пользователь обновлен: {user.id} (@{user.username or 'без username'})")
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении пользователя в БД: {e}")
+    
     welcome_message = (
         f"Привет, {user.first_name}! 👋\n\n"
         "Добро пожаловать в бот для покупки звезд Telegram! ⭐\n\n"
@@ -104,6 +116,15 @@ def handle_message(update: Update, context: CallbackContext) -> None:
 
 def main() -> None:
     """Запуск бота"""
+    # Инициализируем базу данных
+    try:
+        logger.info("Инициализация базы данных...")
+        init_db()
+        logger.info("База данных готова")
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации базы данных: {e}")
+        logger.warning("Бот будет запущен без базы данных")
+    
     # Создаем Updater и передаем ему токен бота
     updater = Updater(token=BOT_TOKEN, use_context=True)
     
